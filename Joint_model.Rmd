@@ -1,0 +1,163 @@
+---
+title: "Joint Model"
+output:
+  html_document:
+    df_print: paged
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+
+#https://cran.r-project.org/web/packages/JM/JM.pdf
+
+# Load necessary packages
+library(survival)
+library(nlme)
+library(JM)
+
+library(readxl)
+path_data<-"Survdata.xlsx" #To do a linear model of the change in the next measure
+survdata <- suppressMessages(read_excel(path_data,col_names=TRUE))
+# eliminating ids that only have 1 measure so their time is 0 so eliminating them
+K<-unique(survdata$Identificacion)
+survdata=survdata[!survdata$`Tiempo (dias)`==0,]
+NoIDs<- setdiff(K,unique(survdata$Identificacion))
+# Removing duplicates
+survdata<-survdata[!duplicated(survdata$Identificacion), ]
+print(length(survdata$Identificacion)-length(unique(survdata$Identificacion)))# Verify the id data is unique
+
+
+FiltIDs<-c(563971,32404827)# data not in the lme4
+survdata=survdata[!survdata$Identificacion %in% FiltIDs ,]
+
+# change column names
+colnames(survdata)<-c("1","Identificacion","Falla_renal","EPS","Edad","Sexo","Nivel_ingresos","Estado_civil"  ,"Afiliación","Peso","Talla","IMC","Tiempo_dias")
+
+# mice on surv data
+library(mice)
+imputed_data2 <-  mice(survdata, method="rf", print=FALSE)# Random forest method
+survdata <- complete(imputed_data2)
+
+survdata <- survdata[order(survdata$Identificacion),]
+
+# survival regression fit
+fitSURV <- survreg(Surv(`Tiempo_dias`, Falla_renal, type="left") ~ Nivel_ingresos+Edad+Peso+Talla+ cluster(Identificacion), data = survdata, x = TRUE,model=TRUE)# No sexo
+
+summary(fitSURV)
+# linear mixed mod
+# Importing the data and then 
+path_data<-"ClasifDatabaseSurv.xlsx" #To do a linear model of the change in the next measure
+lmeD <- suppressMessages(read_excel(path_data,col_names=TRUE))
+important_base_columns <-  c('Identificacion','Time','1.Proteinuria1.g/L','2.Microalbuminuria1', '3.HbA1C.1', '4.Creatinuria.1', '5.Creatinina.1',
+       '6.Glucemia1', '7.Edad','8.Sexo', '9.Nivel.ingresos',
+       '13.Peso.Kg', '14.Talla.m', '15.IMC', '16.Presion.Art.Sistolica',
+       '17.Presion.Art.Diastolica', '19.Creatinina2.mg.dl',
+       '20.BUN1.mg.d', '21.Albúmina2', '22.Glucemia2.mg.dl', '23.HbA1C2',
+       '24.Calcio.mg.dl', '25.Fosforo.mEq.L.l', '26.PTH.mg.dl',
+       '27.ColesterolTotal.mg.dl', '28.LDLcolest', '29.Colesterol.HDL.mg.dl',
+       '30.Hemoglobina.mg.dl', '31.RCV.Rel.AlbuminuriaCreatinuria',
+       '36.creatinina3.mgdl',"46.Corrected.TFG","45.ParcialOrina",'tfg_before',
+       'tfgD_per_month_before','Falla_renal')#'Proteinuria g/dL' missing the 0
+lmeD <- lmeD[,important_base_columns] #
+
+
+library(mice)
+lmeD<-lmeD[complete.cases(lmeD$"46.Corrected.TFG"),]# Dataframe that is only complete fallas renal
+# Imputing the data with midastouch
+colnames(lmeD)<-c('Identificacion',"Time",'Proteinuria1_g_L','Microalbuminuria_1', 'HbA1C_1', 'Creatinuria_1', 'Creatinina_1',
+       'Glucemia_1', 'Edad',"Sexo", 'Nivel_ingresos',
+       'Peso', 'Talla', 'IMC', 'Presion_Art_Sistolica',
+       'Presion_Art_Diastolica', 'Creatinina2_mg_dl',
+       'BUN1_mg_d', 'Albúmina_2', 'Glucemia2_mg_dl', 'HbA1C_2',
+       'Calcio_mg_dl', 'Fosforo_mEq_L_l', 'PTH_mg_dl',
+       'ColesterolTotal_mg_dl', 'LDLcolest', 'Colesterol_HDL_mg_dl',
+       'Hemoglobina_mg_dl', 'RCV_Rel_AlbuminuriaCreatinuria',
+       'creatinina3_mgdl',
+      "tfg_before",                   "tfgD_per_month_before","Corrected_TFG"         ,"ParcialOrina","Falla_renal")
+#attach(lmeD)
+# Clean the data of the unused IDs in surv and order it by ID as in surv
+lmeD<-lmeD[!lmeD$Identificacion %in% NoIDs,]
+
+lmeD <- lmeD[order(lmeD$Identificacion),]
+library(mice)
+imputed_data <-  mice(lmeD, method="rf", print=FALSE)# Random forest method
+lmeDC <- complete(imputed_data)
+
+# reordering again
+lmeD <- lmeD[order(lmeD$Identificacion),]
+
+# fitting the surv model
+fitLME_F <- lme(log(Corrected_TFG) ~ Nivel_ingresos+Sexo* Time+Edad* Time+Peso* Time+ Talla* Time+`Creatinina_1`+ `Proteinuria1_g_L`, random = ~ 1 | Identificacion, data = lmeDC)
+
+summary(fitLME_F)
+# joint model fit, under the (default) Weibull model
+#fitJOINT <- jointModel(fitLME, fitSURV, timeVar = "Time")
+#fitJOINT
+#summary(fitJOINT)
+```
+# See complete or missing values
+```{r}
+library(mice)
+imputed_data2 <-  mice(survdata, method="rf", print=FALSE)# Random forest method
+survdata <- complete(imputed_data2)
+
+# See which columns have incomplete values or infinite values
+apply(survdata, 2, function(x) any(is.na(x) | is.infinite(x)))
+apply(lmeDC, 2, function(x) any(is.na(x) | is.infinite(x)))
+
+# Sexo has some incomplete values, tahts why it doesnt work with it
+```
+
+# Do joint model without incomplete values
+```{r}
+library(JMbayes2)
+library(survival)
+library(nlme)
+fitSURV <- survreg(Surv(`Tiempo_dias`, Falla_renal) ~Nivel_ingresos+Edad+Peso+Talla+cluster(Identificacion), data = survdata, x = TRUE,model=TRUE) #Sexo is not a complete valuetherefore we have to take it out
+
+fitLME <- lme(Corrected_TFG ~ Time + Nivel_ingresos +Edad + Sexo +Peso + Talla+`Creatinina_1`+ `Proteinuria1_g_L`+cluster(Identificacion), random = ~ Time | Identificacion, data = lmeDC)
+
+paste0(length(unique(lmeDC$Identificacion)),' ',length(survdata$Identificacion))
+
+
+fForms <- list("Corrected_TFG" = ~ value(Corrected_TFG) + slope(Corrected_TFG))
+joint_model_fit_3 <- jm(fitSURV, fitLME, time_var = "Time",
+functional_forms = fForms, n_chains = 1L,
+n_iter = 11000L, n_burnin = 1000L)
+joint_model_fit_3
+summary(joint_model_fit_3)
+joint_model_fit_3
+```
+
+# Do Joint modeling with Sexo included maybe later or if needed
+```{r}
+M<-apply(survdata,2, function(x) is.na(x))
+# Select data of IDs that have no Info of sex and filter them out
+IDsNoSEXO<-survdata[(M[,c(6)]==TRUE),2]
+# Filtering both dataframes
+lmeD<-lmeD[!lmeD$Identificacion %in% IDsNoSEXO,]
+survdata<-survdata[!survdata$Identificacion%in% IDsNoSEXO,]
+
+# Model of linear regression
+fitLME2 <- lme(log(Corrected_TFG) ~ Nivel_ingresos+Sexo+Edad +Peso+ Talla+`Creatinina_1`+ `Proteinuria1_g_L`, random = ~ Time | Identificacion, data = lmeDC)
+summary(fitLME2)
+
+# survival regression fit
+fitSURV2 <- survreg(Surv(`Tiempo_dias`, Falla_renal, type="left") ~ Nivel_ingresos+Sexo+Edad+Peso+Talla+ cluster(Identificacion), data = survdata, x = TRUE,model=TRUE)# No sexo
+
+summary(fitSURV)
+# linear mixed mod
+# joint model fit, under the (default) Weibull model
+#joint_model_fit_4 <- jm(fitSURV2, fitLME2, time_var = "Time",
+#functional_forms = fForms, n_chains = 1L,
+#n_iter = 11000L, n_burnin = 1000L)
+#joint_model_fit_4
+#summary(joint_model_fit_4)
+
+
+```
+
+
